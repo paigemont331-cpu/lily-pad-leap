@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lily Pad Leap</title>
+<style>
+:root{--ink:#173c36;--leaf:#55a878;--pond:#a9e4e5;--cream:#fff9e8;--pink:#ffb8c7}
+*{box-sizing:border-box}body{margin:0;background:linear-gradient(#dcf6e8,#bde9e8);font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:var(--ink);min-height:100vh;display:grid;place-items:center;padding:18px}
+main{width:min(760px,100%);background:rgba(255,249,232,.94);border:3px solid #387a64;border-radius:26px;box-shadow:0 14px 0 #387a6430;padding:clamp(16px,3vw,28px)}
+header{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}h1{font-size:clamp(1.8rem,5vw,3rem);margin:0;letter-spacing:-1.5px} .subtitle{margin:4px 0 16px;color:#46746a}
+.stats{display:flex;gap:8px;flex-wrap:wrap}.pill{background:#e1f2d9;border:2px solid #9ccba8;border-radius:99px;padding:7px 12px;font-weight:750}
+canvas{display:block;width:100%;height:auto;aspect-ratio:640/440;background:#9fe0df;border:3px solid #5caa9c;border-radius:18px;touch-action:manipulation}
+.row{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap;margin-top:14px}
+button{font:inherit;font-weight:800;border:0;border-radius:14px;padding:11px 17px;background:#347c5a;color:white;cursor:pointer;box-shadow:0 4px 0 #21563d}
+button:hover{filter:brightness(1.07)}button:active{transform:translateY(2px);box-shadow:0 2px 0 #21563d}
+.hint{font-size:.92rem;line-height:1.45;color:#38675d;max-width:430px}
+.overlay{position:relative}.screen{position:absolute;inset:0;display:grid;place-items:center;background:#123c357e;border-radius:15px;padding:18px;text-align:center}.panel{background:#fff9e8;border:3px solid #387a64;border-radius:22px;padding:22px;max-width:390px;box-shadow:0 8px 0 #21563d55}.panel h2{margin:0 0 8px;font-size:1.7rem}.panel p{line-height:1.45;margin:8px 0 16px}.hidden{display:none!important}
+kbd{background:white;border:1px solid #a5c8ba;border-radius:5px;padding:1px 5px;font-size:.85em}
+footer{text-align:center;margin-top:12px;font-size:.8rem;color:#5c8176}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>🐸 Lily Pad Leap</h1><p class="subtitle">A tiny pond. A big hopping adventure.</p></div><div class="stats"><span class="pill">Score: <b id="score">0</b></span><span class="pill">Best: <b id="best">0</b></span><span class="pill">Lives: <b id="lives">3</b> 💚</span></div></header>
+<div class="overlay">
+<canvas id="game" width="640" height="440" aria-label="Lily Pad Leap game area"></canvas>
+<div class="screen" id="start"><div class="panel"><h2>Ready to leap?</h2><p>Hop across the lily pads, collect golden flies, and watch out! Some pads sink after you land on them.</p><p><b>Move:</b> arrow keys / WASD or tap a nearby pad.</p><button id="play">Start hopping!</button></div></div>
+<div class="screen hidden" id="end"><div class="panel"><h2 id="endTitle">Oh, lily!</h2><p id="endText">Your pond adventure is over.</p><button id="again">Play again</button></div></div>
+</div>
+<div class="row"><div class="hint"><b>How to play:</b> Reach the far bank to score. Grab ✨ flies for bonus points. Step on a dotted pad and it sinks after a moment. Falling in costs a life.</div><button id="restart">↻ Restart</button></div>
+<footer>Tip: Each leap should land on a nearby lily pad. Plan your route!</footer>
+</main>
+<script>
+(() => {
+const canvas=document.getElementById('game'),ctx=canvas.getContext('2d');
+const W=640,H=440,scoreEl=document.getElementById('score'),bestEl=document.getElementById('best'),livesEl=document.getElementById('lives');
+const startEl=document.getElementById('start'),endEl=document.getElementById('end');
+let pads=[],frog,flies,score,lives,best=0,playing=false,frame=0,keys={},message='';
+try{best=Number(localStorage.getItem('lilypad-best')||0)}catch(e){}bestEl.textContent=best;
+function setup(){
+ pads=[];
+ // A sequence of reachable stepping stones, with some optional risky pads.
+ const coords=[
+ [320,394,48,0],[240,335,43,0],[360,304,42,1],[465,332,42,0],[510,255,42,1],
+ [405,220,44,0],[295,237,42,1],[185,207,43,0],[110,155,41,1],[220,122,43,0],
+ [350,143,42,1],[465,110,43,0],[545,65,42,1],[400,52,45,0],[260,62,43,1],[115,50,46,0]
+ ];
+ coords.forEach((p,i)=>pads.push({x:p[0],y:p[1],r:p[2],sink:false,vanishAt:0,fragile:!!p[3],id:i}));
+ frog={x:320,y:394,target:null,from:null,t:1,r:17};
+ flies=[{x:462,y:331,taken:false},{x:294,y:237,taken:false},{x:219,y:122,taken:false},{x:400,y:52,taken:false}];
+ score=0;lives=3;frame=0;playing=true;message='';updateHud();startEl.classList.add('hidden');endEl.classList.add('hidden');draw();
+}
+function updateHud(){scoreEl.textContent=score;livesEl.textContent=lives;bestEl.textContent=best}
+function nearestPad(x,y,range=130){
+ let cand=pads.filter(p=>!p.sink&&Math.hypot(p.x-x,p.y-y)<range).sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y));
+ return cand[0];
+}
+function leap(dx,dy){
+ if(!playing||frog.target)return;
+ let candidates=pads.filter(p=>!p.sink&&p.id!==currentPadId()&&Math.hypot(p.x-frog.x,p.y-frog.y)<154);
+ candidates=candidates.filter(p=> (dx===0||Math.sign(p.x-frog.x)===dx)&&(dy===0||Math.sign(p.y-frog.y)===dy));
+ candidates.sort((a,b)=>Math.hypot(a.x-frog.x,a.y-frog.y)-Math.hypot(b.x-frog.x,b.y-frog.y));
+ if(candidates[0]){frog.from={x:frog.x,y:frog.y};frog.target=candidates[0];frog.t=0}
+}
+function currentPadId(){let p=pads.find(p=>Math.hypot(p.x-frog.x,p.y-frog.y)<p.r*.65);return p?p.id:-1}
+function hopTo(p){if(!playing||frog.target||!p||p.sink)return;if(Math.hypot(p.x-frog.x,p.y-frog.y)>160)return;frog.from={x:frog.x,y:frog.y};frog.target=p;frog.t=0}
+function arrive(p){
+ frog.x=p.x;frog.y=p.y;frog.target=null;frog.from=null;
+ if(p.fragile){p.sink=true;p.vanishAt=frame+36}
+ const fly=flies.find(f=>!f.taken&&Math.hypot(f.x-frog.x,f.y-frog.y)<48);
+ if(fly){fly.taken=true;score+=5}
+ if(frog.y<38){score+=10;lives=Math.min(3,lives+1); // return to starting bank for another crossing
+   pads.forEach(p=>{p.sink=false;p.vanishAt=0});flies.forEach(f=>f.taken=false);
+   frog.x=320;frog.y=394;scoreEl.textContent=score;
+ }
+ scoreEl.textContent=score;updateHud();
+}
+function fall(){
+ lives--;updateHud();frog.target=null;frog.from=null;
+ if(lives<=0){playing=false;endEl.classList.remove('hidden');document.getElementById('endTitle').textContent='Splash!';document.getElementById('endText').textContent=`Final score: ${score}. ${score>best?'A new pond record!':'Ready to try a different route?'}`;if(score>best){best=score;try{localStorage.setItem('lilypad-best',best)}catch(e){}bestEl.textContent=best;}return}
+ pads.forEach(p=>{p.sink=false;p.vanishAt=0});frog.x=320;frog.y=394;
+}
+function update(){
+ frame++;
+ pads.forEach(p=>{if(p.sink&&frame>=p.vanishAt){p.sunkGone=true}});
+ if(frog.target){frog.t+=.075;let t=Math.min(1,frog.t),e=t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+ frog.x=frog.from.x+(frog.target.x-frog.from.x)*e;
+ frog.y=frog.from.y+(frog.target.y-frog.from.y)*e-Math.sin(t*Math.PI)*42;
+ if(t>=1)arrive(frog.target);
+ }
+ if(frog.y>H+30)fall();
+ // Tiny pond ripples and sparkles animated in draw.
+}
+function roundedPad(p){
+ if(p.sunk&&p.sunkGone)return;
+ ctx.save();ctx.translate(p.x,p.y);
+ if(p.sink){ctx.globalAlpha=.42}
+ ctx.fillStyle='#347e63';ctx.beginPath();ctx.ellipse(2,5,p.r+2,p.r*.69+2,-.1,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle=p.fragile?'#9edb85':'#66c783';ctx.beginPath();ctx.ellipse(0,0,p.r,p.r*.67,-.1,0,Math.PI*2);ctx.fill();
+ ctx.strokeStyle='#3b986b';ctx.lineWidth=2;ctx.beginPath();ctx.ellipse(0,0,p.r-5,p.r*.67-5,-.1,0,Math.PI*2);ctx.stroke();
+ ctx.strokeStyle='#3b986b';ctx.beginPath();ctx.moveTo(-4,0);ctx.lineTo(12,-7);ctx.stroke();
+ if(p.fragile&&!p.sink){ctx.fillStyle='#eff8b7';ctx.font='bold 14px sans-serif';ctx.fillText('···',-9,5)}
+ ctx.restore();
+}
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ // pond glints
+ for(let i=0;i<16;i++){let x=(i*79+frame*.15)%W,y=(i*53+25)%H;ctx.fillStyle='#ffffff66';ctx.beginPath();ctx.ellipse(x,y,7,2,Math.sin(i)*.3,0,Math.PI*2);ctx.fill()}
+ ctx.fillStyle='#e2f7c7';ctx.fillRect(0,0,W,25);ctx.fillRect(0,H-22,W,22);
+ ctx.fillStyle='#538c60';ctx.font='bold 13px system-ui';ctx.fillText('FAR BANK',12,17);ctx.fillText('START BANK',12,H-7);
+ pads.forEach(p=>roundedPad(p));
+ flies.forEach((f,i)=>{if(f.taken)return;let pulse=1+Math.sin(frame/8+i)*.13;ctx.save();ctx.translate(f.x,f.y);ctx.scale(pulse,pulse);ctx.fillStyle='#fff3a4';ctx.shadowColor='#fff3a4';ctx.shadowBlur=13;ctx.font='bold 23px sans-serif';ctx.textAlign='center';ctx.fillText('✦',0,8);ctx.restore()});
+ // frog with a little hop shadow
+ ctx.fillStyle='#276a5960';ctx.beginPath();ctx.ellipse(frog.x,frog.y+12,16,6,0,0,Math.PI*2);ctx.fill();
+ ctx.save();ctx.translate(frog.x,frog.y);
+ ctx.fillStyle='#2e965d';ctx.beginPath();ctx.ellipse(0,0,17,15,0,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle='#52bd70';ctx.beginPath();ctx.ellipse(-1,-5,15,12,0,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle='#eaffc9';ctx.beginPath();ctx.arc(-7,-11,6,0,Math.PI*2);ctx.arc(7,-11,6,0,Math.PI*2);ctx.fill();
+ ctx.fillStyle='#153c35';ctx.beginPath();ctx.arc(-6,-11,2.5,0,Math.PI*2);ctx.arc(8,-11,2.5,0,Math.PI*2);ctx.fill();
+ ctx.strokeStyle='#245c43';ctx.lineWidth=2;ctx.beginPath();ctx.arc(1,-2,5,.15,Math.PI-.15);ctx.stroke();
+ ctx.restore();
+ if(playing&&!frog.target){ctx.fillStyle='#23574c';ctx.font='12px system-ui';ctx.textAlign='center';ctx.fillText('Choose a nearby pad!',W/2,35)}
+}
+function loop(){if(playing)update();draw();requestAnimationFrame(loop)}
+document.addEventListener('keydown',e=>{
+ const k=e.key.toLowerCase();if(['arrowup','arrowdown','arrowleft','arrowright',' '].includes(k))e.preventDefault();
+ if(!playing)return;
+ if(k==='arrowup'||k==='w')leap(0,-1);else if(k==='arrowdown'||k==='s')leap(0,1);else if(k==='arrowleft'||k==='a')leap(-1,0);else if(k==='arrowright'||k==='d')leap(1,0);
+});
+canvas.addEventListener('pointerdown',e=>{
+ if(!playing||frog.target)return;const r=canvas.getBoundingClientRect(),x=(e.clientX-r.left)*W/r.width,y=(e.clientY-r.top)*H/r.height;
+ const p=pads.filter(p=>!p.sink&&!p.sunkGone&&Math.hypot(p.x-x,p.y-y)<p.r+10).sort((a,b)=>Math.hypot(a.x-x,a.y-y)-Math.hypot(b.x-x,b.y-y))[0];
+ if(p)hopTo(p);
+});
+document.getElementById('play').onclick=setup;document.getElementById('again').onclick=setup;document.getElementById('restart').onclick=setup;
+setup();playing=false;startEl.classList.remove('hidden');loop();
+})();
+</script>
+</body>
+</html>
